@@ -1,6 +1,6 @@
 {
   "name": "dsh-antigravity-boost",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Antigravity /boost-style deep reasoning for DeepSeek Harness: ephemeral isolated worktrees, parallel implementation + investigation workstreams, local verification, and a failure-feedback iteration loop.",
   "type": "module",
   "main": "lib/index.js",

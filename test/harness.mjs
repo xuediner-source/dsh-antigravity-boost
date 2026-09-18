@@ -28,7 +28,13 @@ z.number = () => chain();
 z.array = () => chain();
 export default z;
 `,
-  'dsh-tools': `export const defineTool = (tool) => tool;\n`,
+  'dsh-tools': `export const defineTool = (tool) => {
+  // Mirror DSH: defineTool reads options.output.render unguarded.
+  const userRender = tool.output.render;
+  if (typeof userRender !== 'function') throw new TypeError('tool must declare output.render');
+  return tool;
+};
+`,
 };
 
 export function ensureStubs() {

@@ -38,7 +38,10 @@ describe('plugin: registration', () => {
     const { ctx, host } = makeHost();
     mod.apply(ctx, { verifyCommands: ['node -e ""'], maxRounds: 3 });
     for (const c of COMMANDS) assert.ok(host.commands.has(c), `command /${c} must be registered`);
-    for (const t of TOOLS) assert.ok(host.tools.has(t), `tool ${t} must be registered`);
+    for (const t of TOOLS) {
+      assert.ok(host.tools.has(t), `tool ${t} must be registered`);
+      assert.equal(typeof host.tools.get(t).output?.render, 'function', `${t} must declare output.render`);
+    }
   });
 
   it('registers the three-phase usage section including the investigation rule', async () => {
