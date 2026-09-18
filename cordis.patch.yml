@@ -1,0 +1,13 @@
+# dsh-antigravity-boost bundle patch — mounts the /boost orchestrator on any
+# profile that composes the base services (commands, tools, agents).
+#
+# Config overrides can be layered here:
+#
+#   - insert:
+#       - id: dsh-antigravity-boost
+#         config:
+#           maxRounds: 4
+#           verifyCommands: ["npm test"]
+- insert:
+    - id: dsh-antigravity-boost
+      name: dsh-antigravity-boost
