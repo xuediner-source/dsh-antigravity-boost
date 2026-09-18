@@ -1,10 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadPlugin, makeHost } from './harness.mjs';
+import { isolateStateHome, loadPlugin, makeHost, uniqueAgent } from './harness.mjs';
+
+// Keep the plugin's cross-repo active-run registry out of the real ~/.dsh and
+// out of other tests' state.
+isolateStateHome();
 
 const COMMANDS = ['boost', 'boost-status', 'boost-verify', 'boost-report', 'boost-deliver', 'boost-discard'];
 const TOOLS = ['boost_run', 'boost_status', 'boost_verify', 'boost_report', 'boost_deliver'];
@@ -23,7 +27,22 @@ function makeRepo() {
   return dir;
 }
 
-const agentFor = (dir) => ({ session: { id: 'sess-1', header: { cwd: dir } } });
+/**
+ * A stable agent per working directory.
+ *
+ * Every test builds a fresh repo dir, so memoising by dir gives one stable
+ * session id within a test (the open-then-verify flow needs it) while keeping
+ * ids unique across tests (so the active-run registry cannot leak state).
+ */
+const agentsByDir = new Map();
+const agentFor = (dir) => {
+  let agent = agentsByDir.get(dir);
+  if (!agent) {
+    agent = uniqueAgent(dir);
+    agentsByDir.set(dir, agent);
+  }
+  return agent;
+};
 
 describe('plugin: registration', () => {
   it('exports the Cordis surface', async () => {
@@ -144,6 +163,105 @@ describe('plugin: command behaviour', () => {
     const result = host.commands.get('boost-discard').handler({ rawInput: '', agent: agentFor(dir) });
     assert.equal(result.kind, 'success', result.text);
     assert.match(result.text, /discarded/i);
+  });
+});
+
+describe('plugin: cross-repo active-run tracking', () => {
+  /**
+   * The scenario this exists for: the session cwd is a PARENT folder that is
+   * not a git repo (e.g. F:\DPH), and `/boost <repo-path> <task>` creates the
+   * run inside the target repo. Follow-up commands must find that run without
+   * being re-pointed at the repo.
+   */
+  function parentDirWithRepo() {
+    const parent = mkdtempSync(join(tmpdir(), 'boost-parent-'));
+    const repo = join(parent, 'project');
+    const git = (...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    mkdirSync(repo, { recursive: true });
+    git('init', '-q');
+    git('config', 'user.name', 'boost-test');
+    git('config', 'user.email', 'boost@localhost');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ name: 'p', version: '1.0.0', type: 'module' }));
+    writeFileSync(join(repo, 'app.js'), 'export const x = 1;\n');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'initial');
+    return { parent, repo };
+  }
+
+  it('follow-up commands find a run opened with an explicit repo path', async () => {
+    const mod = await loadPlugin();
+    const { ctx, host } = makeHost();
+    const { parent, repo } = parentDirWithRepo();
+    const agent = uniqueAgent(parent); // session cwd is the NON-repo parent
+    mod.apply(ctx, { verifyCommands: ['node -e ""'], maxRounds: 3 });
+
+    const opened = host.commands.get('boost').handler({ rawInput: `${repo} fix the bug`, agent });
+    assert.equal(opened.kind, 'success', opened.text);
+    assert.match(opened.text, /Three-phase protocol/);
+
+    // No repo path on the follow-ups — the active-run pointer must resolve it.
+    const status = host.commands.get('boost-status').handler({ rawInput: '', agent });
+    assert.equal(status.kind, 'success', status.text);
+    assert.match(status.text, new RegExp(repo.replace(/\\/g, '\\\\')), 'status must report the target repo');
+
+    const report = host.commands.get('boost-report').handler({ rawInput: 'implementation added the guard', agent });
+    assert.equal(report.kind, 'success', report.text);
+
+    const verify = host.commands.get('boost-verify').handler({ rawInput: '', agent });
+    assert.equal(verify.kind, 'success', verify.text);
+    assert.match(verify.text, /verification passed/i);
+  });
+
+  it('a non-repo cwd with no repo path says how to target one', async () => {
+    const mod = await loadPlugin();
+    const { ctx, host } = makeHost();
+    const { parent } = parentDirWithRepo();
+    mod.apply(ctx, { verifyCommands: [] });
+    const result = host.commands.get('boost').handler({ rawInput: 'do something', agent: uniqueAgent(parent) });
+    assert.equal(result.kind, 'error');
+    assert.match(result.text, /not a git repository/i);
+    // The repo is one level down, so it must be offered as a target.
+    assert.match(result.text, /Git repositories available here|repo-path/);
+  });
+
+  it('an unrelated session cannot deliver or discard another session run', async () => {
+    const mod = await loadPlugin();
+    const { ctx, host } = makeHost();
+    const { parent, repo } = parentDirWithRepo();
+    const owner = uniqueAgent(parent);
+    mod.apply(ctx, { verifyCommands: ['node -e ""'] });
+    const opened = host.commands.get('boost').handler({ rawInput: `${repo} owned by another session`, agent: owner });
+    assert.equal(opened.kind, 'success', opened.text);
+
+    // A different session in the same parent folder: the run is discoverable
+    // (useful context) but must NOT be destructively actionable, or a bare
+    // /boost-deliver in a fresh session could merge someone else's work.
+    const stranger = uniqueAgent(parent);
+    const deliver = host.commands.get('boost-deliver').handler({ rawInput: '', agent: stranger });
+    assert.equal(deliver.kind, 'error', 'deliver by inference must be refused');
+    assert.match(deliver.text, /refusing to deliver by inference/i);
+
+    const discard = host.commands.get('boost-discard').handler({ rawInput: '', agent: stranger });
+    assert.equal(discard.kind, 'error', 'discard by inference must be refused');
+    assert.match(discard.text, /refusing to discard by inference/i);
+
+    // The owner can still deliver once verification passes.
+    host.commands.get('boost-verify').handler({ rawInput: '', agent: owner });
+    const ownerDeliver = host.commands.get('boost-deliver').handler({ rawInput: '', agent: owner });
+    assert.equal(ownerDeliver.kind, 'success', ownerDeliver.text);
+  });
+
+  it('the owner can still deliver a run opened with an explicit repo path', async () => {
+    const mod = await loadPlugin();
+    const { ctx, host } = makeHost();
+    const { parent, repo } = parentDirWithRepo();
+    const owner = uniqueAgent(parent);
+    mod.apply(ctx, { verifyCommands: ['node -e ""'] });
+    host.commands.get('boost').handler({ rawInput: `${repo} a verified change`, agent: owner });
+    host.commands.get('boost-verify').handler({ rawInput: '', agent: owner });
+    const delivered = host.commands.get('boost-deliver').handler({ rawInput: '', agent: owner });
+    assert.equal(delivered.kind, 'success', delivered.text);
   });
 });
 

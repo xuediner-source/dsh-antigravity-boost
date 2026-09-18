@@ -9,7 +9,8 @@
  * onto the plugin's own ctx, so the mock exposes commands / tools / systemPrompt
  * / on / effect as ctx properties.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -50,6 +51,33 @@ export function ensureStubs() {
     writeFileSync(join(dir, 'index.js'), source);
   }
   return STUBS;
+}
+
+/**
+ * Redirect the plugin's cross-repo state home into a throwaway directory.
+ *
+ * `worktree.js` keeps an active-run registry under `DSH_HOME` (default
+ * `~/.dsh/dsh-boost/active.json`) so a session that opened a run with
+ * `/boost <repo-path> <task>` can follow up without re-passing the repo. Tests
+ * must not read or write the developer's real home, and each test needs a
+ * clean registry — otherwise a run created by one test is "found" by the next.
+ */
+export function isolateStateHome() {
+  if (!process.env.DSH_HOME || !process.env.DSH_HOME.includes('boost-test-home-')) {
+    process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'boost-test-home-'));
+  }
+  return process.env.DSH_HOME;
+}
+
+let sessionCounter = 0;
+
+/**
+ * A fresh agent per call. Unique session ids keep the active-run registry from
+ * leaking state between tests.
+ */
+export function uniqueAgent(dir) {
+  sessionCounter += 1;
+  return { session: { id: `sess-test-${sessionCounter}`, header: { cwd: dir, origin: 'user' } } };
 }
 
 /** Import the real plugin entry through the stub tree. */

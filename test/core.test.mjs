@@ -4,7 +4,10 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadLib } from './harness.mjs';
+import { isolateStateHome, loadLib } from './harness.mjs';
+
+// Keep the cross-repo active-run registry out of the developer's real ~/.dsh.
+isolateStateHome();
 
 const worktree = await loadLib('worktree');
 const pipeline = await loadLib('pipeline');
