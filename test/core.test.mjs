@@ -180,4 +180,59 @@ describe('pipeline: three phases and the feedback loop', () => {
     const merged = execFileSync('git', ['-C', dir, 'show', 'HEAD:math.js'], { encoding: 'utf8' });
     assert.match(merged, /zero/, 'verified change must be merged into the target branch');
   });
+
+  it('auto-commits pending worktree changes so uncommitted edits are preserved and merged on deliver', () => {
+    const { dir } = makeRepo();
+    const created = worktree.createRun(dir, { task: 'auto-commit test', verifyCommands: ['node -e ""'] });
+    // Agent modifies file directly in worktree WITHOUT running git commit!
+    writeFileSync(join(created.state.worktree, 'math.js'), 'export function divide(a, b) { return 42; }\n');
+    pipeline.iterate(dir, created.state.runId, { verifyCommands: ['node -e ""'] });
+    const closed = worktree.closeRun(dir, created.state.runId);
+    assert.equal(closed.ok, true, closed.reason);
+    assert.equal(closed.merged, true);
+    const merged = execFileSync('git', ['-C', dir, 'show', 'HEAD:math.js'], { encoding: 'utf8' });
+    assert.match(merged, /42/, 'uncommitted worktree edits must be safely auto-committed and merged into main repo');
+  });
+
+  it('rejects investigation workstream when files were modified on disk even if report passed files=[]', () => {
+    const { dir } = makeRepo();
+    const created = worktree.createRun(dir, { task: 'investigate with sneak edit' });
+    // Sneakily edit a file in worktree
+    writeFileSync(join(created.state.worktree, 'math.js'), 'corrupted');
+    const rejected = pipeline.report(dir, created.state.runId, {
+      kind: 'investigation',
+      summary: 'claimed no file changes',
+      files: [],
+    });
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.reason, /must not modify files on disk/i);
+  });
+
+  it('automatically adds .dsh-boost to .git/info/exclude', () => {
+    const { dir } = makeRepo();
+    worktree.createRun(dir, { task: 'exclude test' });
+    const excludeContent = execFileSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' });
+    assert.ok(!excludeContent.includes('.dsh-boost'), '.dsh-boost must not show up in main git status');
+  });
+
+  it('aborts merge and keeps repo clean when delivery encounters merge conflict', () => {
+    const { dir, git } = makeRepo();
+    const created = worktree.createRun(dir, { task: 'conflict test', verifyCommands: ['node -e ""'] });
+    // Make conflicting change in worktree
+    writeFileSync(join(created.state.worktree, 'math.js'), 'export const conflict = "from worktree";\n');
+    execFileSync('git', ['-C', created.state.worktree, 'add', '-A'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', created.state.worktree, 'commit', '-q', '-m', 'wt conflict'], { stdio: 'ignore' });
+    // Make conflicting change in main branch
+    writeFileSync(join(dir, 'math.js'), 'export const conflict = "from main";\n');
+    git('add', 'math.js');
+    git('commit', '-q', '-m', 'main conflict');
+
+    pipeline.iterate(dir, created.state.runId, { verifyCommands: ['node -e ""'] });
+    const closed = worktree.closeRun(dir, created.state.runId);
+    assert.equal(closed.ok, false);
+    assert.match(closed.reason, /merge failed/i);
+    // Main repo should NOT be in MERGING state
+    const status = git('status', '--porcelain');
+    assert.equal(status.trim(), '', 'main repo must be clean after aborted merge');
+  });
 });

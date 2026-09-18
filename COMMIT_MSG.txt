@@ -1,0 +1,23 @@
+feat: workspace targeting + real-host contract fixes
+
+/boost required the session cwd to be a git repository; sessions started in a
+parent folder (e.g. F:\DPH) hit the guard and stopped. Now every command and
+tool accepts an explicit repo path, and run lookup falls back to nearby
+repositories that hold boost runs:
+
+- /boost [repo-path] <task>
+- /boost-status|verify|deliver|discard [repo-path | runId]
+- tools accept an optional workspace parameter
+- worktree.js gains nearbyRepos() / repoHasRuns(); createRun lists usable
+  repos when the workspace is not a git repo, instead of a bare refusal
+
+Also:
+- verify.js splitCommand() honours quoted arguments — `node -e "process.exit(1)"`
+  was evaluated as a string literal (no-op, exit 0), so a failing command
+  passed the verification gate
+- all tools declare output{schema,render} required by the real DSH defineTool
+- test stub mirrors the real defineTool contract instead of passing anything
+  through
+
+Verified against the real defineTool extracted from app.asar: apply() loads,
+all 5 tools construct, test suite 36/36 green.

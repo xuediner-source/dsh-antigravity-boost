@@ -12,6 +12,8 @@ dsh plugin --profile web add github:xuediner-source/dsh-antigravity-boost
 
 重启 DSH 后即生效。
 
+插件目录下不要安装 `@deepseek-ai/*`。那些包必须由 DSH 主机提供；本地一份会盖掉主机解析（曾导致 `z.const is not a function`）。
+
 ## 能力（对照官方规格）
 
 官方 `/boost` 的三阶段：

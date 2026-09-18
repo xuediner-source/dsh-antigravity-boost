@@ -19,13 +19,16 @@ const STUBS = join(HERE, '.stubs');
 
 const STUB_SOURCES = {
   schemastery: `
-const chain = () => { const o = {}; o.default = () => o; o.required = () => o; o.min = () => o; o.max = () => o; return o; };
+const chain = () => { const o = {}; o.default = () => o; o.required = () => o; o.min = () => o; o.max = () => o; o.step = () => o; return o; };
 const z = () => chain();
 z.object = (shape) => { const o = { shape }; o.default = () => o; return o; };
 z.string = () => chain();
 z.boolean = () => chain();
 z.number = () => chain();
 z.array = () => chain();
+z.union = () => chain();
+z.const = () => chain();
+z.natural = () => chain();
 export default z;
 `,
   'dsh-tools': `export const defineTool = (tool) => {
